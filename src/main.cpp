@@ -184,7 +184,7 @@ int main() {
   // Lane number; 0 - left most, 1 - middle lane, 2 - right lane;
   uint32_t lane = 1; // Start with middle lane
   // Target velocity
-  double target_v_mph = 49.5; // Slightly less than 50mph
+  double target_v_mph = 0; // Slightly less than 50mph
 
   string line;
   while (getline(in_map_, line)) {
@@ -251,6 +251,28 @@ int main() {
             assert(previous_path_x.size() == previous_path_y.size());
             // Get the previous points size;
             size_t prev_size = previous_path_x.size();
+            // Check sensor fusion data for nearby cars
+            bool close_car = false;
+            for(int i = 0; i < sensor_fusion.size(); i++) {
+              float _d = sensor_fusion[i][6];
+              if( _d < (4+4*lane) && _d > (4*lane)){
+                double vx = sensor_fusion[i][3];
+                double vy = sensor_fusion[i][4];
+                double check_speed = sqrt(vx*vx + vy*vy);
+                double check_car_s = sensor_fusion[i][5];
+                // predict the s value at the end of our car's future points
+                check_car_s += ((double)prev_size*0.02*check_speed);
+                if(check_car_s > end_path_s &&
+                    (check_car_s - end_path_s) < 30){
+                  close_car = true;
+                }
+              }
+            }
+            if(close_car){
+              target_v_mph -= 0.224;
+            } else if(target_v_mph < 49.5){
+              target_v_mph += 0.224;
+            }
             // Copy the current car state variables;
             double ref_x = car_x;
             double ref_y = car_y;
