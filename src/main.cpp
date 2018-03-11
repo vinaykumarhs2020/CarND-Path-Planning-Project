@@ -8,6 +8,7 @@
 #include "Eigen-3.3/Eigen/Core"
 #include "Eigen-3.3/Eigen/QR"
 #include "json.hpp"
+#include "spline.h"
 
 using namespace std;
 
@@ -180,6 +181,11 @@ int main() {
 
   ifstream in_map_(map_file_.c_str(), ifstream::in);
 
+  // Lane number; 0 - left most, 1 - middle lane, 2 - right lane;
+  uint32_t lane = 1; // Start with middle lane
+  // Target velocity
+  double target_v_mph = 49.5; // Slightly less than 50mph
+
   string line;
   while (getline(in_map_, line)) {
   	istringstream iss(line);
@@ -200,8 +206,10 @@ int main() {
   	map_waypoints_dy.push_back(d_y);
   }
 
-  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
-                     uWS::OpCode opCode) {
+  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,
+    &map_waypoints_dx,&map_waypoints_dy, &lane,
+    &target_v_mph](uWS::WebSocket<uWS::SERVER> ws, char *data,
+    size_t length, uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
     // The 2 signifies a websocket event
@@ -218,7 +226,6 @@ int main() {
 
         if (event == "telemetry") {
           // j[1] is the data JSON object
-
         	// Main car's localization Data
           	double car_x = j[1]["x"];
           	double car_y = j[1]["y"];
@@ -239,20 +246,82 @@ int main() {
 
           	json msgJson;
 
-          	vector<double> next_x_vals;
-          	vector<double> next_y_vals;
-
-
           	// TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
-            double dist_inc = 0.5;
-            for(int i = 0; i < 50; i++)
-            {
-              double next_s = car_s + (i+1)*dist_inc;
-              double next_d = 6;
-              vector<double> xy = getXY(next_s, next_d, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-              next_x_vals.push_back(xy[0]);
-              next_y_vals.push_back(xy[1]);
+            // Assert if previous_path_x and y have same size;
+            assert(previous_path_x.size() == previous_path_y.size());
+            // Get the previous points size;
+            size_t prev_size = previous_path_x.size();
+            // Copy the current car state variables;
+            double ref_x = car_x;
+            double ref_y = car_y;
+            double ref_yaw = deg2rad(car_yaw);
+            // Create sample waypoints
+            vector<double> ptsx;
+            vector<double> ptsy;
+            if(prev_size < 2){
+              // For less than two previous points;
+              double _prev_car_x = car_x - cos(ref_yaw);
+              double _prev_car_y = car_y - sin(ref_yaw);
+              ptsx.push_back(_prev_car_x);
+              ptsy.push_back(_prev_car_y);
+              ptsx.push_back(car_x);
+              ptsy.push_back(car_y);
+            } else {
+              ref_x = previous_path_x[prev_size-1];
+              ref_y = previous_path_y[prev_size-1];
+              double _prev_ref_x = previous_path_x[prev_size-2];
+              double _prev_ref_y = previous_path_y[prev_size-2];
+              ref_yaw = atan2(ref_y - _prev_ref_y, ref_x - _prev_ref_x);
+              ptsx.push_back(_prev_ref_x);
+              ptsy.push_back(_prev_ref_y);
+              ptsx.push_back(ref_x);
+              ptsy.push_back(ref_y);
             }
+            vector<double> projections = {30, 60, 90};
+            for(auto &p: projections){
+              vector<double> next_wp = getXY(car_s+p, (2+4*lane),
+                    map_waypoints_s, map_waypoints_x, map_waypoints_y);
+              ptsx.push_back(next_wp[0]);
+              ptsy.push_back(next_wp[1]);
+            }
+            // Transform ptsx & ptsy to local coordinates
+            for(size_t i = 0; i < ptsx.size(); i++){
+              double _shift_x = ptsx[i] - ref_x;
+              double _shift_y = ptsy[i] - ref_y;
+              ptsx[i] = _shift_x*cos(0-ref_yaw) - _shift_y*sin(0-ref_yaw);
+              ptsy[i] = _shift_x*sin(0-ref_yaw) + _shift_y*cos(0-ref_yaw);
+            }
+            // initialize and fit a spline
+            tk::spline s;
+            s.set_points(ptsx, ptsy);
+            // Fill in the existing map_waypoints
+            vector<double> next_x_vals;
+            vector<double> next_y_vals;
+            for(size_t i=0; i< prev_size; i++){
+              next_x_vals.push_back(previous_path_x[i]);
+              next_y_vals.push_back(previous_path_y[i]);
+            }
+
+            // Calculate the spline points using target distance
+            double target_x = 30.0;
+            double target_y = s(target_x);
+            double target_dist = distance(0, 0, target_x, target_y);
+            double _temp_x = 0;
+            double n_steps = target_dist/(0.02*target_v_mph/2.24);
+            uint32_t num_waypoints = 50;
+            for(size_t i = 0; i< num_waypoints - prev_size; i++){
+              double _x_c = _temp_x + target_x/n_steps; // x in car coordinates
+              double _y_c = s(_x_c); // y in car coordinates
+              _temp_x = _x_c;
+              double _x = _x_c;
+              double _y = _y_c;
+              // Transform car coordinates to global
+              _x_c = (_x*cos(ref_yaw) - _y*sin(ref_yaw)) + ref_x;
+              _y_c = (_x*sin(ref_yaw) + _y*cos(ref_yaw)) + ref_y;
+              next_x_vals.push_back(_x_c);
+              next_y_vals.push_back(_y_c);
+            }
+
           	msgJson["next_x"] = next_x_vals;
           	msgJson["next_y"] = next_y_vals;
 
