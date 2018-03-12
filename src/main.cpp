@@ -263,6 +263,7 @@ int main() {
               double check_car_s = sensor_fusion[i][5];
               // predict the s value at the end of our car's future points
               check_car_s += ((double)prev_size*0.02*check_speed);
+              // Process the cars ahead of our car
               if(check_car_s > end_path_s &&
                   (check_car_s - end_path_s) < 30){
                 // Check if car is ahead of our car
@@ -276,6 +277,20 @@ int main() {
                 // Check if car is on the right side;
                 else{
                   car_right = true;
+                }
+              }
+              // Cars around or slightly behind us
+              else {
+                // If there is a car within 15 meters from our car
+                if(abs(car_s - check_car_s) < 30 &&
+                  (target_v_mph - check_speed) < 15){
+                  if(_d <= (4*lane)){
+                    car_left = true;
+                  }
+                  // Check if car is on the right side;
+                  else{
+                    car_right = true;
+                  }
                 }
               }
             }
