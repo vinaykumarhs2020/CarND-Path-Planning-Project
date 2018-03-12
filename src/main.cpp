@@ -252,24 +252,55 @@ int main() {
             // Get the previous points size;
             size_t prev_size = previous_path_x.size();
             // Check sensor fusion data for nearby cars
-            bool close_car = false;
+            bool car_ahead = false;
+            bool car_left = false;
+            bool car_right = false;
             for(int i = 0; i < sensor_fusion.size(); i++) {
               float _d = sensor_fusion[i][6];
-              if( _d < (4+4*lane) && _d > (4*lane)){
-                double vx = sensor_fusion[i][3];
-                double vy = sensor_fusion[i][4];
-                double check_speed = sqrt(vx*vx + vy*vy);
-                double check_car_s = sensor_fusion[i][5];
-                // predict the s value at the end of our car's future points
-                check_car_s += ((double)prev_size*0.02*check_speed);
-                if(check_car_s > end_path_s &&
-                    (check_car_s - end_path_s) < 30){
-                  close_car = true;
+              double vx = sensor_fusion[i][3];
+              double vy = sensor_fusion[i][4];
+              double check_speed = sqrt(vx*vx + vy*vy);
+              double check_car_s = sensor_fusion[i][5];
+              // predict the s value at the end of our car's future points
+              check_car_s += ((double)prev_size*0.02*check_speed);
+              if(check_car_s > end_path_s &&
+                  (check_car_s - end_path_s) < 30){
+                // Check if car is ahead of our car
+                if( _d < (4+4*lane) && _d > (4*lane)){
+                  car_ahead = true;
+                }
+                // Check if car is on the left lane;
+                else if(_d <= (4*lane)){
+                  car_left = true;
+                }
+                // Check if car is on the right side;
+                else{
+                  car_right = true;
                 }
               }
             }
-            if(close_car){
+            if(car_ahead){
               target_v_mph -= 0.224;
+              // Try to switch lane when slowing down
+              if(target_v_mph < 30){
+                switch (lane) {
+                  case 0:
+                    if(!car_right)
+                      lane = 1;
+                    break;
+                  case 1:
+                    if(!car_left)
+                      lane = 0;
+                    else if(!car_right)
+                      lane = 2;
+                    break;
+                  case 2:
+                    if(!car_left)
+                      lane = 1;
+                    break;
+                  default: break;
+                }
+              }
             } else if(target_v_mph < 49.5){
               target_v_mph += 0.224;
             }
